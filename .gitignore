@@ -1,0 +1,10 @@
+# rust
+/target/
+**/target/
+
+# local runtime
+settings.json
+outputs/
+dist/
+.cargo-packager/
+*-setup.exe

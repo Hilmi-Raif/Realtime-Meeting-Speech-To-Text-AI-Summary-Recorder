@@ -1,0 +1,26 @@
+name = "rms-ai-recorder"
+version = "0.1.0"
+product-name = "RMS AI Recorder"
+identifier = "rms-ai-recorder"
+description = "Realtime meeting speech-to-text recorder with AI summaries"
+homepage = "https://github.com/Hilmi-Raif/Realtime-Meeting-Speech-To-Text-AI-Summary-Recorder"
+publisher = "Hilmi Raif"
+category = "Utility"
+before-packaging-command = "cargo build --release --locked"
+
+binaries = [{ path = "target/release/rms-ai-recorder.exe", main = true }]
+resources = ["assets/icon.ico"]
+icons = ["assets/icon.ico"]
+
+[windows]
+allow-downgrades = false
+
+[nsis]
+installer-mode = "currentUser"
+installer-icon = "assets/icon.ico"
+template = "packaging/nsis/installer.nsi"
+languages = ["English"]
+appdata-paths = [
+  "$LOCALAPPDATA\\rms-ai-recorder",
+  "$LOCALAPPDATA\\RMS AI Recorder\\RMS AI Recorder\\data",
+]
