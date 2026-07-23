@@ -2,7 +2,7 @@ use crossbeam_channel::Sender;
 use eframe::egui;
 use tokio_util::sync::CancellationToken;
 
-use super::options::AppStage;
+use super::options::{AppStage, FailedStage};
 use super::RmsApp;
 use crate::audio::wasapi_loopback;
 
@@ -13,9 +13,14 @@ pub enum UiMessage {
         wav_path: String,
     },
     GroqTranscript(String),
+    AssemblyAiFinalTranscript(String),
+    BatchTranscriptionDone,
     Summary(String),
     Log(String),
     Error(String),
+    GroqError(String),
+    AssemblyAiError(String),
+    SummaryError(String),
     Stage(String),
     CredentialCheck {
         provider: CredentialProvider,
@@ -27,6 +32,7 @@ pub enum UiMessage {
 #[derive(Clone, Copy)]
 pub enum CredentialProvider {
     Deepgram,
+    AssemblyAi,
     Groq,
     Summary,
 }
@@ -51,17 +57,47 @@ impl RmsApp {
                 }
                 UiMessage::GroqTranscript(text) => {
                     self.groq_result = text;
-                    self.push_log("Groq: transcript saved to UI".to_string());
-                    self.start_summary_task(ctx.clone());
+                    self.push_log("[Groq] Completed successfully.".to_string());
+                }
+                UiMessage::AssemblyAiFinalTranscript(text) => {
+                    self.assemblyai_transcripts.clear();
+                    self.assemblyai_transcripts.push(text);
+                    self.push_log("[AssemblyAI] Completed successfully.".to_string());
+                }
+                UiMessage::BatchTranscriptionDone => {
+                    if self.options.enable_summary && self.summary_result.trim().is_empty() {
+                        self.start_summary_task(ctx.clone());
+                    } else {
+                        self.stage = AppStage::Done;
+                        self.failed_stage = None;
+                    }
                 }
                 UiMessage::Summary(text) => {
                     self.summary_result = text;
-                    self.push_log("Summary: text ready in UI".to_string());
+                    self.push_log("[Summary] Completed successfully.".to_string());
                     self.stage = AppStage::Done;
+                    self.failed_stage = None;
                 }
                 UiMessage::Log(line) => self.push_log(line),
                 UiMessage::Error(err) => self.push_error(err),
-                UiMessage::Stage(stage) => self.stage = parse_stage(&stage),
+                UiMessage::GroqError(err) => {
+                    self.push_error(format!("[Groq] Error: {err}"));
+                    self.failed_stage = Some(FailedStage::Groq);
+                }
+                UiMessage::AssemblyAiError(err) => {
+                    self.push_error(format!("[AssemblyAI] Error: {err}"));
+                    self.failed_stage = Some(FailedStage::AssemblyAi);
+                }
+                UiMessage::SummaryError(err) => {
+                    self.push_error(format!("[Summary] Error: {err}"));
+                    self.failed_stage = Some(FailedStage::Summary);
+                }
+                UiMessage::Stage(stage) => {
+                    self.stage = parse_stage(&stage);
+                    if !matches!(self.stage, AppStage::Error) {
+                        self.failed_stage = None;
+                    }
+                }
                 UiMessage::CredentialCheck { provider, result } => {
                     let status = match result {
                         Ok(message) => message,
@@ -69,6 +105,7 @@ impl RmsApp {
                     };
                     match provider {
                         CredentialProvider::Deepgram => self.deepgram_check_status = status,
+                        CredentialProvider::AssemblyAi => self.assemblyai_check_status = status,
                         CredentialProvider::Groq => self.groq_check_status = status,
                         CredentialProvider::Summary => self.summary_check_status = status,
                     }
@@ -114,7 +151,6 @@ impl RmsApp {
             chrono::Local::now().format("%H:%M:%S"),
             err
         ));
-        self.transcripts.push(format!("ERROR: {}", err));
         self.stage = AppStage::Error;
     }
 }
@@ -124,6 +160,7 @@ fn parse_stage(stage: &str) -> AppStage {
         "Finalizing WAV" => AppStage::Finalizing,
         "Review transcript" => AppStage::Review,
         "Groq chunk/upload" => AppStage::GroqProcessing,
+        "AssemblyAI WAV upload" => AppStage::AssemblyAiProcessing,
         "Summary generation" => AppStage::SummaryProcessing,
         "Done" => AppStage::Done,
         _ => AppStage::Recording,

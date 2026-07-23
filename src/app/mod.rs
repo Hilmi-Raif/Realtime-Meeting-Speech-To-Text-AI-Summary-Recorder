@@ -16,7 +16,9 @@ mod views;
 mod workflow;
 
 pub use messages::UiMessage;
-use options::{load_persisted_options, save_persisted_options, AppStage, WorkflowOptions};
+use options::{
+    load_persisted_options, save_persisted_options, AppStage, FailedStage, WorkflowOptions,
+};
 use ui::{configure_style, Theme};
 
 const PANEL_GAP: f32 = 12.0;
@@ -24,7 +26,6 @@ const PANEL_PAD: f32 = 18.0;
 const CONTENT_PAD: f32 = 14.0;
 const LOG_WIDTH: f32 = 340.0;
 const COMPACT_BREAKPOINT: f32 = 760.0;
-const NARROW_TOP_BAR: f32 = 900.0;
 const DIALOG_MAX_WIDTH: f32 = 550.0;
 const DIALOG_MIN_WIDTH: f32 = 320.0;
 const DIALOG_MAX_HEIGHT: f32 = 600.0;
@@ -41,8 +42,10 @@ const RADIUS_MD: f32 = 10.0;
 const RADIUS_XL: f32 = 14.0;
 pub struct RmsApp {
     stage: AppStage,
+    failed_stage: Option<FailedStage>,
     show_settings: bool,
     transcripts: Vec<String>,
+    assemblyai_transcripts: Vec<String>,
     logs: Vec<String>,
     interim_transcript: String,
     groq_result: String,
@@ -60,6 +63,7 @@ pub struct RmsApp {
     transcript_last_edit_at: Option<Instant>,
     transcript_autosave_status: String,
     deepgram_check_status: String,
+    assemblyai_check_status: String,
     groq_check_status: String,
     summary_check_status: String,
     close_after_busy: bool,
@@ -93,8 +97,10 @@ impl RmsApp {
 
         let mut app = Self {
             stage: AppStage::Init,
+            failed_stage: None,
             show_settings: false,
             transcripts: Vec::new(),
+            assemblyai_transcripts: Vec::new(),
             logs: vec!["Init: choose a mode, then click Start".to_string()],
             interim_transcript: String::new(),
             groq_result: String::new(),
@@ -112,6 +118,7 @@ impl RmsApp {
             transcript_last_edit_at: None,
             transcript_autosave_status: "Realtime transcript saved".to_string(),
             deepgram_check_status: "Unchecked".to_string(),
+            assemblyai_check_status: "Unchecked".to_string(),
             groq_check_status: "Unchecked".to_string(),
             summary_check_status: "Unchecked".to_string(),
             close_after_busy: false,

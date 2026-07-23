@@ -24,6 +24,25 @@ impl RmsApp {
         });
     }
 
+    pub(super) fn check_assemblyai_credentials(&mut self, ctx: egui::Context) {
+        self.assemblyai_check_status = "Checking...".to_string();
+        let api_key = self.options.assemblyai_api_key.clone();
+        let model = self.options.assemblyai_model.clone();
+        let language = self.options.language.clone();
+        let ui_tx = self.ui_tx.clone();
+        self.rt.spawn(async move {
+            let result = credentials::check_assemblyai(api_key, model, language).await;
+            emit(
+                &ui_tx,
+                &ctx,
+                UiMessage::CredentialCheck {
+                    provider: CredentialProvider::AssemblyAi,
+                    result,
+                },
+            );
+        });
+    }
+
     pub(super) fn check_groq_credentials(&mut self, ctx: egui::Context) {
         self.groq_check_status = "Checking...".to_string();
         let api_key = self.options.groq_api_key.clone();

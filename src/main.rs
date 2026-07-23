@@ -18,7 +18,7 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1180.0, 720.0])
-        .with_min_inner_size([940.0, 560.0]);
+        .with_min_inner_size([1140.0, 640.0]);
     if let Some(icon) = load_window_icon() {
         viewport = viewport.with_icon(icon);
     }

@@ -6,7 +6,7 @@
 
 **RMS AI Recorder** is a desktop meeting recorder for realtime speech to text, final audio transcription, and AI-generated meeting summaries.
 
-It records microphone and desktop loopback audio, streams realtime transcription through Deepgram, saves a local WAV when recording stops, lets you review the realtime transcript, and can run Groq Whisper plus AI summary generation when you click Run AI.
+It records microphone and desktop loopback audio, streams realtime transcription through Deepgram, saves a local WAV when recording stops, lets you review the realtime transcript, and can run Groq Whisper and/or AssemblyAI batch transcription plus AI summary generation when you click Run AI.
 
 > **Windows-first:** Desktop/system audio capture is currently Windows-only through WASAPI loopback. Cross-platform system audio would require separate backends such as ScreenCaptureKit on macOS and PipeWire or PulseAudio on Linux.
 
@@ -17,10 +17,12 @@ It records microphone and desktop loopback audio, streams realtime transcription
 - Microphone input recording with selectable input devices.
 - Optional output device selection for loopback capture.
 - Local WAV recording for final post-processing.
-- Optional Groq Whisper transcription after transcript review.
-- Optional AI meeting summary from reviewed realtime and final transcripts.
+- Optional **Groq Whisper** WAV transcription after transcript review.
+- Optional **AssemblyAI WAV** batch transcription after transcript review.
+- Granular post-processing controls with step-specific **Retry** / **Skip** (Groq, AssemblyAI, Summary) and explicit **Done** state transition.
+- Optional AI meeting summary generated from reviewed realtime and batch transcripts.
 - OpenAI-compatible summary API support.
-- API credential check buttons for Deepgram, Groq, and summary provider.
+- API credential check buttons for Deepgram, AssemblyAI, Groq, and summary provider.
 - Auto-save settings with debounce in the desktop app.
 - Configurable output directory, file names, models, language, and prompt.
 - Dark mode desktop interface built with egui.
@@ -34,7 +36,7 @@ It records microphone and desktop loopback audio, streams realtime transcription
 | Audio Capture | WASAPI capture and render devices on Windows |
 | WAV Processing | hound |
 | Realtime transcription | Deepgram WebSocket API |
-| Final transcription | Groq Whisper API |
+| Final transcription | Groq Whisper API & AssemblyAI REST API (`/v2/upload`, `/v2/transcript`) |
 | AI Summary | OpenAI-compatible Chat Completions API |
 | HTTP Client | reqwest |
 | Config | JSON via serde and serde_json |
@@ -49,7 +51,7 @@ It records microphone and desktop loopback audio, streams realtime transcription
 │   ├── logger.rs
 │   ├── app/                # egui state, workflow, views, persistence, and widgets
 │   ├── audio/              # recorder, analysis, and WASAPI loopback
-│   └── services/           # Deepgram, Groq, summary, credential checks
+│   └── services/           # Deepgram, AssemblyAI, Groq, summary, credential checks
 ├── assets/                 # Windows app icon
 ├── build.rs                # Windows icon resource embedding
 ├── settings.example.json   # public config template
@@ -85,15 +87,18 @@ Main configuration fields:
 | Key | Description |
 | --- | ----------- |
 | `enable_deepgram` | Enable realtime Deepgram transcription |
+| `enable_assemblyai` | Run AssemblyAI WAV batch transcription after review |
 | `auto_groq` | Run Groq Whisper transcription after transcript review |
 | `enable_summary` | Generate AI summary after transcript review |
-| `input_device_names` | Selected microphone/capture devices; use `Default` for the default input device, or leave empty when only system audio is selected |
-| `output_device_names` | Selected system/loopback output devices; use `Default` for the default output device, or leave empty when only microphone input is selected |
+| `input_device_names` | Selected microphone/capture devices; use `Default` for default input device |
+| `output_device_names` | Selected system/loopback output devices; use `Default` for default output device |
 | `deepgram_api_key` | Deepgram API key |
+| `assemblyai_api_key` | AssemblyAI API key |
 | `groq_api_key` | Groq API key |
 | `summary_api_key` | OpenAI-compatible API key |
 | `summary_base_url` | OpenAI-compatible API base URL |
 | `deepgram_model` | Deepgram realtime model |
+| `assemblyai_model` | AssemblyAI batch model (e.g. `universal-2` or `universal-3-5-pro`) |
 | `groq_model` | Groq Whisper model |
 | `summary_model` | Chat completion model for summary |
 | `language` | Transcription language code |
@@ -111,7 +116,8 @@ The desktop app auto-saves settings after edits. Select `Default` to use the OS 
 - [Rust](https://www.rust-lang.org/tools/install)
 - Windows for WASAPI loopback recording
 - Deepgram API key for realtime transcription
-- Groq API key for final Whisper transcription
+- AssemblyAI API key for batch WAV transcription (optional)
+- Groq API key for final Whisper transcription (optional)
 - OpenAI-compatible API key for AI summary generation
 
 ### Setup
@@ -134,6 +140,7 @@ cp settings.example.json settings.json
 ```json
 {
   "deepgram_api_key": "your_deepgram_api_key_here",
+  "assemblyai_api_key": "your_assemblyai_api_key_here",
   "groq_api_key": "your_groq_api_key_here",
   "summary_api_key": "your_openai_compatible_api_key_here"
 }
@@ -170,6 +177,7 @@ The app can generate several local files depending on enabled options:
 | `record.wav` | Local recorded audio |
 | `transcript_log.txt` | Realtime transcript log |
 | `transcript_whisper.txt` | Final Groq Whisper transcript |
+| `transcript_assemblyai.txt` | Final AssemblyAI WAV batch transcript |
 | `summary.txt` | AI-generated meeting summary |
 
 By default, audio is written under `outputs\audio`. Transcripts and summaries are written under `outputs\transcripts`. Output file names and the output folder are configurable in settings.
@@ -189,15 +197,18 @@ flowchart TD
     G --> H[Run AI]
     H --> I{Groq after review enabled}
     I -->|Yes| J[Groq Whisper final transcript]
-    I -->|No| L{AI summary enabled}
-    J --> L
-    G --> L
-    L -->|Yes| M[AI meeting summary]
-    L -->|No| N[Local output files]
-    M --> N
+    I -->|No| K{AssemblyAI enabled}
+    J --> K
+    K -->|Yes| L[AssemblyAI WAV batch transcript]
+    K -->|No| M{AI summary enabled}
+    L --> M
+    G --> M
+    M -->|Yes| N[AI meeting summary]
+    M -->|No| O[Local output files & Done]
+    N --> O
 ```
 
-Deepgram is used for realtime transcript visibility during a meeting. Stop saves the WAV file and opens a review stage where the realtime transcript remains editable. Groq Whisper runs only after you click Run AI, producing a final transcript from the saved WAV file. The AI summary uses the reviewed realtime transcript plus Groq final text when available.
+Deepgram is used for realtime transcript visibility during a meeting. Stop saves the WAV file and opens a review stage where the realtime transcript remains editable. Groq Whisper and AssemblyAI batch transcription run after you click Run AI, producing final transcripts from the saved WAV file. The AI summary combines the reviewed realtime transcript with all available batch transcripts (Groq Whisper and AssemblyAI WAV).
 
 ## API Credential Checks
 
@@ -206,6 +217,7 @@ The settings dialog includes credential check buttons for:
 | Provider | Check |
 | -------- | ----- |
 | Deepgram | Opens a lightweight realtime WebSocket connection |
+| AssemblyAI | Verifies API key & model accessibility via REST endpoint |
 | Groq | Checks model accessibility through the models endpoint |
 | Summary API | Sends a tiny chat completion request |
 

@@ -22,6 +22,9 @@ pub(crate) struct Theme {
     pub(crate) danger_soft: egui::Color32,
     pub(crate) danger_text: egui::Color32,
     pub(crate) danger_border: egui::Color32,
+    pub(crate) assembly_soft: egui::Color32,
+    pub(crate) assembly_text: egui::Color32,
+    pub(crate) assembly_border: egui::Color32,
 }
 
 impl Theme {
@@ -56,6 +59,9 @@ impl Theme {
                 danger_soft: egui::Color32::from_rgb(77, 34, 41),
                 danger_text: egui::Color32::from_rgb(252, 165, 165),
                 danger_border: egui::Color32::from_rgb(127, 49, 58),
+                assembly_soft: egui::Color32::from_rgb(52, 34, 77),
+                assembly_text: egui::Color32::from_rgb(192, 140, 252),
+                assembly_border: egui::Color32::from_rgb(98, 62, 145),
             }
         } else {
             Self {
@@ -79,6 +85,9 @@ impl Theme {
                 danger_soft: egui::Color32::from_rgb(255, 232, 232),
                 danger_text: egui::Color32::from_rgb(185, 28, 28),
                 danger_border: egui::Color32::from_rgb(252, 190, 190),
+                assembly_soft: egui::Color32::from_rgb(243, 235, 255),
+                assembly_text: egui::Color32::from_rgb(126, 34, 206),
+                assembly_border: egui::Color32::from_rgb(216, 180, 254),
             }
         }
     }

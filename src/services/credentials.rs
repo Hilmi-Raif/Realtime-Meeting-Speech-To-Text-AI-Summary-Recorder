@@ -85,6 +85,38 @@ pub async fn check_groq(api_key: String, model: String) -> Result<String, String
     Ok(format!("OK: Groq model {} reachable", model.trim()))
 }
 
+pub async fn check_assemblyai(
+    api_key: String,
+    model: String,
+    _language: String,
+) -> Result<String, String> {
+    validate_key(&api_key, "your_assemblyai_api_key_here")?;
+    validate_non_empty(&model, "AssemblyAI model")?;
+
+    let client = reqwest::Client::new();
+    let response = timeout(
+        Duration::from_secs(8),
+        client
+            .get("https://api.assemblyai.com/v2/transcript/rms-ai-recorder-key-check")
+            .header("Authorization", api_key.trim())
+            .send(),
+    )
+    .await
+    .map_err(|_| "AssemblyAI check timeout".to_string())?
+    .map_err(|e| format!("AssemblyAI check failed: {e}"))?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(format_http_error("AssemblyAI", status, &body));
+    }
+    if status.is_server_error() {
+        return Err(format_http_error("AssemblyAI", status, &body));
+    }
+
+    Ok(format!("OK: AssemblyAI model {} configured", model.trim()))
+}
+
 pub async fn check_openai_compatible(
     api_key: String,
     base_url: String,

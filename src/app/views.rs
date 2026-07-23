@@ -1,27 +1,17 @@
 use eframe::egui;
 
-use super::options::{primary_action_for, AppStage, PrimaryAction};
+use super::options::{
+    primary_action_for, secondary_actions_for, AppStage, PrimaryAction, SecondaryAction,
+};
 use super::ui::*;
 use super::{
     RmsApp, DIALOG_HEIGHT_RATIO, DIALOG_MAX_HEIGHT, DIALOG_MAX_WIDTH, DIALOG_MIN_HEIGHT,
-    DIALOG_MIN_WIDTH, DIALOG_WIDTH_RATIO, NARROW_TOP_BAR, OVERLAY_ALPHA,
+    DIALOG_MIN_WIDTH, DIALOG_WIDTH_RATIO, OVERLAY_ALPHA,
 };
 
 impl RmsApp {
     pub(super) fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let theme = Theme::from_ui(ui);
-        let is_narrow = ui.available_width() < NARROW_TOP_BAR;
-
-        if is_narrow {
-            ui.vertical(|ui| {
-                app_title(ui, &theme);
-                ui.add_space(12.0);
-                ui.horizontal_wrapped(|ui| {
-                    self.draw_actions(ui, ctx);
-                });
-            });
-            return;
-        }
 
         ui.horizontal(|ui| {
             app_title(ui, &theme);
@@ -34,8 +24,25 @@ impl RmsApp {
 
     fn draw_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let theme = Theme::from_ui(ui);
-        let ai_after_review_enabled = self.options.auto_groq || self.options.enable_summary;
-        let primary_action = primary_action_for(self.stage, ai_after_review_enabled);
+        let ai_after_review_enabled =
+            self.options.auto_groq || self.options.enable_assemblyai || self.options.enable_summary;
+        let has_review_wav = self
+            .review_wav_path
+            .as_ref()
+            .map(|p| std::path::Path::new(p).exists())
+            .unwrap_or(false);
+        let primary_action = primary_action_for(
+            self.stage,
+            ai_after_review_enabled,
+            has_review_wav,
+            self.failed_stage,
+        );
+        let secondary_actions = secondary_actions_for(
+            self.stage,
+            ai_after_review_enabled,
+            has_review_wav,
+            self.failed_stage,
+        );
         let can_reset = matches!(
             self.stage,
             AppStage::Review | AppStage::Done | AppStage::Error | AppStage::Init
@@ -79,6 +86,46 @@ impl RmsApp {
             self.reset_session();
         }
 
+        for action in secondary_actions {
+            let button = match action {
+                SecondaryAction::Done => app_button(
+                    action.label(),
+                    theme.success_text,
+                    theme.success_soft,
+                    theme.success_border,
+                ),
+                SecondaryAction::SkipGroq
+                | SecondaryAction::SkipAssemblyAi
+                | SecondaryAction::SkipSummary => app_button(
+                    action.label(),
+                    theme.warning_text,
+                    theme.warning_soft,
+                    theme.warning_border,
+                ),
+            };
+
+            if ui.add(button).clicked() {
+                match action {
+                    SecondaryAction::SkipGroq => {
+                        if let Some(failed) = self.failed_stage {
+                            self.skip_ai_step(failed, ctx.clone());
+                        }
+                    }
+                    SecondaryAction::SkipAssemblyAi => {
+                        if let Some(failed) = self.failed_stage {
+                            self.skip_ai_step(failed, ctx.clone());
+                        }
+                    }
+                    SecondaryAction::SkipSummary => {
+                        if let Some(failed) = self.failed_stage {
+                            self.skip_ai_step(failed, ctx.clone());
+                        }
+                    }
+                    SecondaryAction::Done => self.mark_done(),
+                }
+            }
+        }
+
         if let Some(action) = primary_action {
             let button = match action {
                 PrimaryAction::Stop | PrimaryAction::LoadingStop => app_button(
@@ -87,7 +134,12 @@ impl RmsApp {
                     theme.danger_soft,
                     theme.danger_border,
                 ),
-                PrimaryAction::Start | PrimaryAction::RunAi | PrimaryAction::LoadingRunAi => {
+                PrimaryAction::Start
+                | PrimaryAction::RunAi
+                | PrimaryAction::RetryGroq
+                | PrimaryAction::RetryAssemblyAi
+                | PrimaryAction::RetrySummary
+                | PrimaryAction::LoadingRunAi => {
                     app_button(action.label(), theme.panel_bg, theme.accent, theme.accent)
                 }
             };
@@ -97,6 +149,9 @@ impl RmsApp {
                     PrimaryAction::Start => self.start_workflow(ctx.clone()),
                     PrimaryAction::Stop => self.stop_workflow(),
                     PrimaryAction::RunAi => self.run_ai_after_review(ctx.clone()),
+                    PrimaryAction::RetryGroq
+                    | PrimaryAction::RetryAssemblyAi
+                    | PrimaryAction::RetrySummary => self.retry_failed_step(ctx.clone()),
                     PrimaryAction::LoadingStop | PrimaryAction::LoadingRunAi => {}
                 }
             }
@@ -217,7 +272,7 @@ impl RmsApp {
                                 ui,
                                 &theme,
                                 "Session setup",
-                                "Choose live transcription, review-time Groq, and summary output.",
+                                "Choose live transcription, after-review WAV transcription, and summary output.",
                                 16.0,
                             );
                             ui.add_space(16.0);
@@ -230,6 +285,7 @@ impl RmsApp {
                                 "Stream live transcript while recording.",
                             );
                             ui.add_space(10.0);
+
                             option_row(
                                 ui,
                                 &theme,
@@ -241,18 +297,28 @@ impl RmsApp {
                             option_row(
                                 ui,
                                 &theme,
+                                &mut self.options.enable_assemblyai,
+                                "AssemblyAI after review",
+                                "Create AssemblyAI final from the saved WAV when Run AI is clicked.",
+                            );
+                            ui.add_space(10.0);
+
+                            option_row(
+                                ui,
+                                &theme,
                                 &mut self.options.enable_summary,
                                 "AI Summary TXT",
-                                "Create a summary from reviewed transcript and Groq final when available.",
+                                "Create a summary from reviewed transcript and batch transcripts when available.",
                             );
                             if !self.options.enable_deepgram
                                 && !self.options.auto_groq
+                                && !self.options.enable_assemblyai
                                 && !self.options.enable_summary
                             {
                                 ui.add_space(8.0);
                                 ui.label(
                                     egui::RichText::new(
-                                        "Recording only: no live transcript, Groq final, or summary will be generated.",
+                                        "Recording only: no live transcript, after-review WAV transcript, or summary will be generated.",
                                     )
                                     .size(12.5)
                                     .color(theme.muted),
@@ -329,17 +395,28 @@ impl RmsApp {
                                 .num_columns(1)
                                 .spacing([0.0, 8.0])
                                 .show(ui, |ui| {
-                                    let deepgram_status = self.deepgram_check_status.clone();
-                                    if password_check_row(
-                                        ui,
-                                        &theme,
-                                        "Deepgram API key",
-                                        &mut self.options.deepgram_api_key,
-                                        &deepgram_status,
-                                    ) {
-                                        self.check_deepgram_credentials(ui.ctx().clone());
-                                    }
-                                    ui.end_row();
+                                     let deepgram_status = self.deepgram_check_status.clone();
+                                     if password_check_row(
+                                         ui,
+                                         &theme,
+                                         "Deepgram API key",
+                                         &mut self.options.deepgram_api_key,
+                                         &deepgram_status,
+                                     ) {
+                                         self.check_deepgram_credentials(ui.ctx().clone());
+                                     }
+                                     ui.end_row();
+                                     let assemblyai_status = self.assemblyai_check_status.clone();
+                                     if password_check_row(
+                                         ui,
+                                         &theme,
+                                         "AssemblyAI API key",
+                                         &mut self.options.assemblyai_api_key,
+                                         &assemblyai_status,
+                                     ) {
+                                         self.check_assemblyai_credentials(ui.ctx().clone());
+                                     }
+                                     ui.end_row();
                                     let groq_status = self.groq_check_status.clone();
                                     if password_check_row(
                                         ui,
@@ -376,13 +453,20 @@ impl RmsApp {
                                         &mut self.options.deepgram_model,
                                     );
                                     ui.end_row();
-                                    labeled_text_field(
-                                        ui,
-                                        &theme,
-                                        "Groq model",
-                                        &mut self.options.groq_model,
-                                    );
-                                    ui.end_row();
+                                     labeled_text_field(
+                                         ui,
+                                         &theme,
+                                         "Groq model",
+                                         &mut self.options.groq_model,
+                                     );
+                                     ui.end_row();
+                                     labeled_text_field(
+                                         ui,
+                                         &theme,
+                                         "AssemblyAI model",
+                                         &mut self.options.assemblyai_model,
+                                     );
+                                     ui.end_row();
                                     labeled_text_field(
                                         ui,
                                         &theme,
@@ -433,7 +517,7 @@ impl RmsApp {
                                         .color(theme.muted),
                                 );
                             }
-                        }); // close inner right padding frame
+                        }); // close inner frame
                     });
             });
 

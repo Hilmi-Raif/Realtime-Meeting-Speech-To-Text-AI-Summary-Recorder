@@ -8,12 +8,15 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use super::messages::{bridge_audio_events_to_ui, emit, UiMessage};
-use super::options::{normalized_output_dir, session_id, session_output_path_in_dir, AppStage};
+use super::options::{
+    normalized_output_dir, session_id, session_output_path_in_dir, AfterReviewTranscriptionMode,
+    AppStage, FailedStage,
+};
 use super::{storage, RmsApp};
 use crate::audio::analysis::{analyze_wav_activity, AudioActivityConfig};
 use crate::audio::recorder;
 use crate::audio::wasapi_loopback;
-use crate::services::{deepgram, groq, summary};
+use crate::services::{assemblyai, deepgram, groq, summary};
 
 impl RmsApp {
     pub(super) fn start_workflow(&mut self, ctx: egui::Context) {
@@ -26,6 +29,7 @@ impl RmsApp {
         self.transcript_last_edit_at = None;
         self.transcript_autosave_status = "Realtime transcript saved".to_string();
         self.transcripts.clear();
+        self.assemblyai_transcripts.clear();
         self.logs.clear();
         self.interim_transcript.clear();
         self.groq_result.clear();
@@ -265,8 +269,32 @@ impl RmsApp {
         }
     }
 
+    pub(super) fn retry_failed_step(&mut self, ctx: egui::Context) {
+        let failed = self.failed_stage;
+        self.failed_stage = None;
+        match failed {
+            Some(FailedStage::Summary) => {
+                self.push_log("[Summary] Retrying summary generation...".to_string());
+                self.start_summary_task(ctx);
+            }
+            Some(FailedStage::AssemblyAi) => {
+                self.push_log("[AssemblyAI] Retrying WAV transcription...".to_string());
+                self.run_ai_after_review_internal(ctx, true);
+            }
+            Some(FailedStage::Groq) | None => {
+                self.push_log("[Groq] Retrying WAV transcription...".to_string());
+                self.run_ai_after_review_internal(ctx, false);
+            }
+        }
+    }
+
     pub(super) fn run_ai_after_review(&mut self, ctx: egui::Context) {
-        if !matches!(self.stage, AppStage::Review) {
+        self.failed_stage = None;
+        self.run_ai_after_review_internal(ctx, false);
+    }
+
+    fn run_ai_after_review_internal(&mut self, ctx: egui::Context, skip_groq: bool) {
+        if !matches!(self.stage, AppStage::Review | AppStage::Error) {
             return;
         }
 
@@ -298,7 +326,8 @@ impl RmsApp {
 
         self.push_log("Review: AI processing requested".to_string());
 
-        if !options.auto_groq {
+        let mode = options.after_review_transcription_mode();
+        if mode == AfterReviewTranscriptionMode::None || (skip_groq && !mode.runs_assemblyai()) {
             if options.enable_summary {
                 self.start_summary_task(ctx);
             } else {
@@ -311,7 +340,7 @@ impl RmsApp {
         self.stage = AppStage::GroqProcessing;
 
         self.rt.spawn(async move {
-            let should_run_groq =
+            let should_run =
                 match analyze_wav_activity(&wav_path, AudioActivityConfig::default()) {
                     Ok(activity) => {
                         emit(
@@ -332,7 +361,7 @@ impl RmsApp {
                                 &ui_tx,
                                 &ctx_for_workflow,
                                 UiMessage::Log(
-                                    "Groq: skipped because the WAV is silent or has no valid audio"
+                                    "After-review transcription skipped because the WAV is silent or has no valid audio"
                                         .to_string(),
                                 ),
                             );
@@ -349,37 +378,128 @@ impl RmsApp {
                     }
                 };
 
-            if should_run_groq {
-                emit(
-                    &ui_tx,
-                    &ctx_for_workflow,
-                    UiMessage::Stage("Groq chunk/upload".to_string()),
-                );
-                let groq_cancel = CancellationToken::new();
-                let ui_for_log = ui_tx.clone();
-                let ctx_for_log = ctx_for_workflow.clone();
-                match groq::transcribe_wav_idempotent(
-                    wav_path,
-                    options.groq_file_path.clone(),
-                    options.groq_api_key.clone(),
-                    options.groq_model.clone(),
-                    options.language.clone(),
-                    groq_cancel,
-                    move |line| emit(&ui_for_log, &ctx_for_log, UiMessage::Log(line)),
-                )
-                .await
-                {
-                    Ok(text) => emit(&ui_tx, &ctx_for_workflow, UiMessage::GroqTranscript(text)),
-                    Err(err) => emit(
+            if should_run {
+                if !skip_groq && mode.runs_groq() {
+                    emit(
                         &ui_tx,
                         &ctx_for_workflow,
-                        UiMessage::Error(format!("Groq error: {}", err)),
-                    ),
+                        UiMessage::Stage("Groq chunk/upload".to_string()),
+                    );
+                    emit(
+                        &ui_tx,
+                        &ctx_for_workflow,
+                        UiMessage::Log("[Groq] Starting WAV transcription...".to_string()),
+                    );
+                    let groq_cancel = CancellationToken::new();
+                    let ui_for_log = ui_tx.clone();
+                    let ctx_for_log = ctx_for_workflow.clone();
+                    match groq::transcribe_wav_idempotent(
+                        wav_path.clone(),
+                        options.groq_file_path.clone(),
+                        options.groq_api_key.clone(),
+                        options.groq_model.clone(),
+                        options.language.clone(),
+                        groq_cancel,
+                        move |line| emit(&ui_for_log, &ctx_for_log, UiMessage::Log(line)),
+                    )
+                    .await
+                    {
+                        Ok(text) => emit(&ui_tx, &ctx_for_workflow, UiMessage::GroqTranscript(text)),
+                        Err(err) => {
+                            emit(
+                                &ui_tx,
+                                &ctx_for_workflow,
+                                UiMessage::GroqError(err),
+                            );
+                            return;
+                        }
+                    }
                 }
+
+                if mode.runs_assemblyai() {
+                    emit(
+                        &ui_tx,
+                        &ctx_for_workflow,
+                        UiMessage::Stage("AssemblyAI WAV upload".to_string()),
+                    );
+                    emit(
+                        &ui_tx,
+                        &ctx_for_workflow,
+                        UiMessage::Log("[AssemblyAI] Starting WAV upload...".to_string()),
+                    );
+                    let assembly_cancel = CancellationToken::new();
+                    let ui_for_log = ui_tx.clone();
+                    let ctx_for_log = ctx_for_workflow.clone();
+                    match assemblyai::transcribe_wav_idempotent(
+                        wav_path.clone(),
+                        options.assemblyai_file_path.clone(),
+                        options.assemblyai_api_key.clone(),
+                        options.assemblyai_model.clone(),
+                        options.language.clone(),
+                        assembly_cancel,
+                        move |line| emit(&ui_for_log, &ctx_for_log, UiMessage::Log(line)),
+                    )
+                    .await
+                    {
+                        Ok(text) => emit(&ui_tx, &ctx_for_workflow, UiMessage::AssemblyAiFinalTranscript(text)),
+                        Err(err) => {
+                            emit(
+                                &ui_tx,
+                                &ctx_for_workflow,
+                                UiMessage::AssemblyAiError(err),
+                            );
+                            return;
+                        }
+                    }
+                }
+
+                emit(&ui_tx, &ctx_for_workflow, UiMessage::BatchTranscriptionDone);
             } else {
                 emit(&ui_tx, &ctx_for_workflow, UiMessage::Stopped);
             }
         });
+    }
+
+    pub(super) fn skip_ai_step(&mut self, stage: FailedStage, ctx: egui::Context) {
+        match stage {
+            FailedStage::Groq => {
+                self.push_log("[Groq] Skipped by user.".to_string());
+                self.stage = AppStage::Review;
+                self.failed_stage = None;
+                if self
+                    .options
+                    .after_review_transcription_mode()
+                    .runs_assemblyai()
+                {
+                    self.run_ai_after_review(ctx);
+                } else if self.options.enable_summary {
+                    self.start_summary_task(ctx);
+                } else {
+                    self.stage = AppStage::Done;
+                }
+            }
+            FailedStage::AssemblyAi => {
+                self.push_log("[AssemblyAI] Skipped by user.".to_string());
+                self.stage = AppStage::Review;
+                self.failed_stage = None;
+                if self.options.enable_summary {
+                    self.start_summary_task(ctx);
+                } else {
+                    self.stage = AppStage::Done;
+                }
+            }
+            FailedStage::Summary => {
+                self.push_log("[Summary] Skipped by user.".to_string());
+                self.stage = AppStage::Done;
+                self.failed_stage = None;
+            }
+        }
+    }
+
+    pub(super) fn mark_done(&mut self) {
+        self.stage = AppStage::Done;
+        self.failed_stage = None;
+        self.push_log("Workflow: marked as Done by user.".to_string());
     }
 
     pub(super) fn handle_close_request(&mut self, ctx: &egui::Context) {
@@ -421,6 +541,7 @@ impl RmsApp {
         self.transcript_last_edit_at = None;
         self.transcript_autosave_status = "Realtime transcript saved".to_string();
         self.transcripts.clear();
+        self.assemblyai_transcripts.clear();
         self.interim_transcript.clear();
         self.groq_result.clear();
         self.summary_result.clear();
@@ -442,10 +563,21 @@ impl RmsApp {
             .collect::<Vec<_>>()
             .join("\n");
         let whisper_transcript = self.groq_result.trim().to_string();
+        let assemblyai_transcript = self
+            .assemblyai_transcripts
+            .iter()
+            .map(|item| item.trim())
+            .filter(|item| !item.is_empty() && !item.starts_with("ERROR:"))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        if deepgram_transcript.is_empty() && whisper_transcript.is_empty() {
+        if deepgram_transcript.is_empty()
+            && whisper_transcript.is_empty()
+            && assemblyai_transcript.is_empty()
+        {
             self.push_log(
-                "Summary: skipped because Deepgram and Groq transcripts are empty".to_string(),
+                "Summary: skipped because Deepgram, Groq, and AssemblyAI transcripts are empty"
+                    .to_string(),
             );
             return;
         }
@@ -472,6 +604,7 @@ impl RmsApp {
             match summary::generate_summary_text(
                 deepgram_transcript,
                 whisper_transcript,
+                assemblyai_transcript,
                 system_prompt,
                 api_key,
                 base_url,
@@ -488,11 +621,7 @@ impl RmsApp {
                     );
                     emit(&ui_tx, &ctx_for_summary, UiMessage::Summary(summary_text));
                 }
-                Err(err) => emit(
-                    &ui_tx,
-                    &ctx_for_summary,
-                    UiMessage::Error(format!("Summary error: {}", err)),
-                ),
+                Err(err) => emit(&ui_tx, &ctx_for_summary, UiMessage::SummaryError(err)),
             }
         });
     }

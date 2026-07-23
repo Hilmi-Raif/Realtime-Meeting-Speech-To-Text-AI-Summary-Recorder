@@ -61,6 +61,7 @@ impl RmsApp {
                                         if self.transcripts.is_empty()
                                             && self.interim_transcript.is_empty()
                                             && self.groq_result.is_empty()
+                                            && self.assemblyai_transcripts.is_empty()
                                             && self.summary_result.is_empty()
                                         {
                                             empty_transcript(ui, &theme);
@@ -91,6 +92,11 @@ impl RmsApp {
 
                                         if !self.groq_result.is_empty() {
                                             groq_block(ui, &theme, &mut self.groq_result);
+                                            ui.add_space(6.0);
+                                        }
+
+                                        for text in &mut self.assemblyai_transcripts {
+                                            assemblyai_block(ui, &theme, text);
                                             ui.add_space(6.0);
                                         }
 

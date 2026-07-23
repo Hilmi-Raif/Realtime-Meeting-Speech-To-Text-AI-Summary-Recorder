@@ -38,6 +38,7 @@ struct AssistantMessage {
 pub async fn generate_summary_text(
     deepgram_transcript: String,
     whisper_transcript: String,
+    assemblyai_transcript: String,
     system_prompt: String,
     api_key: String,
     base_url: String,
@@ -46,8 +47,11 @@ pub async fn generate_summary_text(
 ) -> Result<String, String> {
     validate_config(&api_key, &base_url, &model)?;
 
-    if deepgram_transcript.trim().is_empty() && whisper_transcript.trim().is_empty() {
-        return Err("Summary skipped: both transcripts are empty".to_string());
+    if deepgram_transcript.trim().is_empty()
+        && whisper_transcript.trim().is_empty()
+        && assemblyai_transcript.trim().is_empty()
+    {
+        return Err("Summary skipped: all transcripts are empty".to_string());
     }
 
     let endpoint = chat_completions_endpoint(&base_url);
@@ -57,7 +61,12 @@ pub async fn generate_summary_text(
         .map_err(|e| format!("Summary HTTP client setup failed: {e}"))?;
     let request = ChatCompletionRequest {
         model,
-        messages: build_messages(&deepgram_transcript, &whisper_transcript, &system_prompt),
+        messages: build_messages(
+            &deepgram_transcript,
+            &whisper_transcript,
+            &assemblyai_transcript,
+            &system_prompt,
+        ),
         temperature: 0.2,
         max_tokens: 2400,
     };
@@ -121,6 +130,7 @@ fn chat_completions_endpoint(base_url: &str) -> String {
 fn build_messages(
     deepgram_transcript: &str,
     whisper_transcript: &str,
+    assemblyai_transcript: &str,
     system_prompt: &str,
 ) -> Vec<ChatMessage> {
     let prompt = if system_prompt.trim().is_empty() {
@@ -137,10 +147,11 @@ fn build_messages(
         ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "Summary date: {}\n\nUse the two transcripts below to create a clear, natural plain-text summary.\n\n<deepgram_realtime_transcript>\n{}\n</deepgram_realtime_transcript>\n\n<groq_whisper_final_transcript>\n{}\n</groq_whisper_final_transcript>",
+                "Summary date: {}\n\nUse the transcripts below to create a clear, natural plain-text summary.\n\n<deepgram_realtime_transcript>\n{}\n</deepgram_realtime_transcript>\n\n<groq_whisper_final_transcript>\n{}\n</groq_whisper_final_transcript>\n\n<assemblyai_wav_final_transcript>\n{}\n</assemblyai_wav_final_transcript>",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
                 fallback_empty(deepgram_transcript),
-                fallback_empty(whisper_transcript)
+                fallback_empty(whisper_transcript),
+                fallback_empty(assemblyai_transcript)
             ),
         },
     ]

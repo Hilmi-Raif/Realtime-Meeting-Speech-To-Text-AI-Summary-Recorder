@@ -91,7 +91,7 @@ pub(crate) fn panel_frame(theme: &Theme) -> egui::Frame {
 }
 
 pub(crate) fn content_frame(_theme: &Theme, fill: egui::Color32) -> egui::Frame {
-    // keep the background separate so the outer border does not clip during scroll
+    // keep background separate to avoid clipping during scroll
     egui::Frame::none()
         .fill(fill)
         .rounding(0.0)
@@ -390,6 +390,12 @@ pub(crate) fn stage_badge(ui: &mut egui::Ui, theme: &Theme, stage: AppStage) {
             "Review",
         ),
         AppStage::GroqProcessing => (theme.accent_soft, theme.accent, theme.accent_border, "Groq"),
+        AppStage::AssemblyAiProcessing => (
+            theme.assembly_soft,
+            theme.assembly_text,
+            theme.assembly_border,
+            "AssemblyAI",
+        ),
         AppStage::SummaryProcessing => (
             theme.accent_soft,
             theme.accent,
@@ -535,6 +541,29 @@ pub(crate) fn groq_block(ui: &mut egui::Ui, theme: &Theme, text: &mut String) {
                     .size(11.5)
                     .strong()
                     .color(theme.accent),
+            );
+            ui.add_space(6.0);
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(1)
+                    .interactive(false),
+            );
+        });
+}
+
+pub(crate) fn assemblyai_block(ui: &mut egui::Ui, theme: &Theme, text: &mut String) {
+    egui::Frame::none()
+        .fill(theme.assembly_soft)
+        .stroke(egui::Stroke::new(1.0, theme.assembly_border))
+        .rounding(egui::Rounding::same(RADIUS_MD))
+        .inner_margin(egui::Margin::same(12.0))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("AssemblyAI final — read only")
+                    .size(11.5)
+                    .strong()
+                    .color(theme.assembly_text),
             );
             ui.add_space(6.0);
             ui.add(
