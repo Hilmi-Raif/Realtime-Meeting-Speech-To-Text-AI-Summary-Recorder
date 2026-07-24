@@ -85,7 +85,9 @@ impl RmsApp {
                                             self.mark_transcript_dirty();
                                         }
 
-                                        if !self.interim_transcript.is_empty() {
+                                        if matches!(self.stage, AppStage::Recording)
+                                            && !self.interim_transcript.is_empty()
+                                        {
                                             interim_block(ui, &theme, &self.interim_transcript);
                                             ui.add_space(6.0);
                                         }

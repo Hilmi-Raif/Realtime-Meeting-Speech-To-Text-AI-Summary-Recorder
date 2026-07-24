@@ -263,6 +263,7 @@ impl RmsApp {
         }
 
         self.push_log("UI: stop clicked".to_string());
+        self.interim_transcript.clear();
         self.stage = AppStage::Finalizing;
         if let Some(token) = &self.cancel_token {
             token.cancel();

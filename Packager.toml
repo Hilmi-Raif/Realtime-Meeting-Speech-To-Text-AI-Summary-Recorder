@@ -1,5 +1,5 @@
 name = "rms-ai-recorder"
-version = "0.2.0"
+version = "0.2.1"
 product-name = "RMS AI Recorder"
 identifier = "rms-ai-recorder"
 description = "Realtime meeting speech-to-text recorder with AI summaries"

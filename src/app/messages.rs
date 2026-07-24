@@ -47,6 +47,7 @@ impl RmsApp {
                     self.interim_transcript.clear();
                 }
                 UiMessage::ReviewReady { wav_path } => {
+                    self.interim_transcript.clear();
                     self.review_wav_path = Some(wav_path.clone());
                     self.cancel_token = None;
                     self.stage = AppStage::Review;
